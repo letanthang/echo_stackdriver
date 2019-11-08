@@ -1,0 +1,26 @@
+profiler:
+  prometheus: false
+  statsd_address: 192.168.101.212:8125
+  service: thangtest
+
+thangtest_database:
+  host: 34.87.81.32
+  user: postgres
+  password: gtsa4934
+  name: phoenix
+  debug: true
+
+paging:
+  limit: 100
+
+encryption:
+  oid_key: ghnexp0123456789
+  jwt_secret: secret
+  jwt_secret_partner: secret
+  jwt_exp: 72
+  jwt_pol: 59a795909e65177c27fcdd87
+
+tenant:
+  url: http://103.20.148.177:5124/api/v3/%s
+  api_key: gF0GjXJ85rYsUhvx
+  api_secret_key: A5476961AB0AEE8F9DD3622480AA85C5

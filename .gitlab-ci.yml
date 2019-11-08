@@ -1,0 +1,241 @@
+image: alpine:latest
+
+variables:
+  #KUBERNETES_NAMESPACE_OVERWRITE: gitlab
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+
+stages:
+  - build
+  - develop
+  - staging
+  - uat
+  - production
+  - new-production
+  
+build:
+  stage: build
+  image: docker:stable-git
+  services:
+  - docker:18.09.7-dind
+  script:
+    #- setup_docker
+    - build
+  only:
+    - branches
+
+####################
+## Develop deploy ##
+####################
+
+develop:
+  stage: develop
+  #image: linkyard/docker-helm
+  variables:
+    RELEASE: "develop"
+  script:
+    #- install_dependencies
+    - deploy
+  environment:
+    name: develop
+    #url: http://$CI_PROJECT_PATH_SLUG-staging.$AUTO_DEVOPS_DOMAIN
+  only:
+    refs:
+      - develop
+    #kubernetes: active
+    
+####################
+## Staging deploy ##
+####################
+
+staging:
+  stage: staging
+  #image: linkyard/docker-helm
+  variables:
+    RELEASE: "staging"
+  script:
+    #- install_dependencies
+    - deploy
+  environment:
+    name: staging
+    #url: http://$CI_PROJECT_PATH_SLUG-staging.$AUTO_DEVOPS_DOMAIN
+  only:
+    refs:
+      - master
+    #kubernetes: active
+
+uat:
+  stage: uat
+  #image: linkyard/docker-helm
+  variables:
+    RELEASE: "uat"
+  script:
+    #- install_dependencies
+    - deploy
+  when: manual
+  environment:
+    name: uat
+    #url: http://$CI_PROJECT_PATH_SLUG-staging.$AUTO_DEVOPS_DOMAIN
+  only:
+    refs:
+      - master
+    #kubernetes: active
+
+production:
+  stage: production
+  #image: linkyard/docker-helm
+  variables:
+    RELEASE: "production"
+  script:
+    #- install_dependencies
+    - deploy
+  when: manual
+  environment:
+    name: production
+    #url: http://$CI_PROJECT_PATH_SLUG-staging.$AUTO_DEVOPS_DOMAIN
+  only:
+    refs:
+      - master
+    #kubernetes: active
+
+new-production:
+  stage: new-production
+  variables:
+    RELEASE: "new-production"
+  script:
+    - deploy
+  when: manual
+  environment:
+    name: new-production
+  only:
+    refs:
+      - master
+
+#-----------------------------------
+.auto_devops: &auto_devops |
+
+  export CI_REGISTRY_USER=ghn
+  export CI_REGISTRY_PASSWORD=zgg6dkSw5jDMVL
+  export CI_REGISTRY=docker.ghn.vn
+  export CI_REGISTRY_HOST=asia.gcr.io/ghn-logistic
+
+  function registry_login() {
+      echo "$GCP_DOCKER" >> /tmp/docker_login_json_key.json
+      if [[ -n "$CI_REGISTRY_USER" ]]; then
+        echo "Logging to GitLab Container Registry with CI credentials..."
+        cat /tmp/docker_login_json_key.json | docker login -u _json_key --password-stdin https://asia.gcr.io
+        #docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+        echo ""
+      fi
+    }
+  
+  function build() {
+    registry_login
+    if [[  "$CI_COMMIT_REF_NAME" == "master" ]]; then
+      if [[ -f Dockerfile ]]; then
+        echo "Building Dockerfile-based application..."
+        #build image
+        docker build \
+          --build-arg HTTP_PROXY="$HTTP_PROXY" \
+          --build-arg http_proxy="$http_proxy" \
+          --build-arg HTTPS_PROXY="$HTTPS_PROXY" \
+          --build-arg https_proxy="$https_proxy" \
+          --build-arg FTP_PROXY="$FTP_PROXY" \
+          --build-arg ftp_proxy="$ftp_proxy" \
+          --build-arg NO_PROXY="$NO_PROXY" \
+          --build-arg no_proxy="$no_proxy" \
+          -t "$CI_REGISTRY_HOST/logistic_$CI_PROJECT_NAME" -t "$CI_REGISTRY_HOST/logistic_$CI_PROJECT_NAME:$CI_COMMIT_SHA" .
+      fi
+
+      echo "Pushing to Container Registry..."
+      # image with sha id
+      docker push "$CI_REGISTRY_HOST/logistic_$CI_PROJECT_NAME:$CI_COMMIT_SHA"
+      # image latest
+      docker push "$CI_REGISTRY_HOST/logistic_$CI_PROJECT_NAME:latest"
+      echo "END"
+    elif [[ "$CI_COMMIT_REF_NAME" == "develop" ]]; then
+      if [[ -f Dockerfile ]]; then
+        echo "Building Dockerfile-based application..."
+        docker build \
+          --build-arg HTTP_PROXY="$HTTP_PROXY" \
+          --build-arg http_proxy="$http_proxy" \
+          --build-arg HTTPS_PROXY="$HTTPS_PROXY" \
+          --build-arg https_proxy="$https_proxy" \
+          --build-arg FTP_PROXY="$FTP_PROXY" \
+          --build-arg ftp_proxy="$ftp_proxy" \
+          --build-arg NO_PROXY="$NO_PROXY" \
+          --build-arg no_proxy="$no_proxy" \
+          -t "$CI_REGISTRY_HOST/logistic_$CI_PROJECT_NAME" .
+      fi
+
+      echo "Pushing to Container Registry..."
+      docker push "$CI_REGISTRY_HOST/logistic_$CI_PROJECT_NAME:latest"
+      echo ""
+    else
+      echo ""
+    fi
+  }
+
+  function deploy() {
+    # install kubectl
+    apk add --no-cache curl
+    curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+    chmod +x ./kubectl
+    mv ./kubectl /usr/local/bin/kubectl
+    
+    #pre-config kubectl
+    if [[ "$RELEASE" == "new-production" ]]; then
+      rm -rf ~/.kube
+      mkdir ~/.kube
+      echo "$NEW_KUBE_PROD" >> /tmp/kube_config
+      base64 -d /tmp/kube_config >> ~/.kube/config
+      kubectl get all
+    elif [[ "$RELEASE" == "production" ]]; then
+      rm -rf ~/.kube
+      mkdir ~/.kube
+      echo "$KUBE_PROD" >> /tmp/kube_config
+      base64 -d /tmp/kube_config >> ~/.kube/config
+      kubectl get all
+    else
+      rm -rf ~/.kube
+      mkdir ~/.kube
+      echo "$KUBE_STAGING" >> /tmp/kube_config
+      base64 -d /tmp/kube_config >> ~/.kube/config
+      kubectl get all
+    fi
+    # #pwd
+    # #kubectl config view
+
+    #pre-config env
+    export _VERSION_="$CI_COMMIT_SHA"
+    export DATE=`date +%s`
+  
+
+    #deploy
+    if [[ "$RELEASE" == "develop" ]]; then
+      sed 's/_VERSION_/'"latest"'/g; s/APP_NAME/'"$CI_PROJECT_NAME"'/g; s/_DATE_/'"$DATE"'/g; s/env-/staging-/g' ./provision/k8s/staging/* > deployment.yaml
+      cat deployment.yaml
+      kubectl apply -f deployment.yaml
+    elif [[ "$RELEASE" == "staging" ]]; then
+      sed 's/_VERSION_/'"latest"'/g; s/APP_NAME/'"$CI_PROJECT_NAME"'/g; s/_DATE_/'"$DATE"'/g; s/env-/'"$RELEASE-"'/g' ./provision/k8s/staging/* > deployment.yaml
+      cat deployment.yaml
+      kubectl apply -f deployment.yaml
+    elif [[ "$RELEASE" == "uat" ]]; then
+      sed 's/_VERSION_/'"$CI_COMMIT_SHA"'/g; s/APP_NAME/'"$CI_PROJECT_NAME"'/g; s/_DATE_/'"$DATE"'/g; s/env-/'"$RELEASE-"'/g; s/staging-truck/uat-truck/g' ./provision/k8s/production/* > deployment.yaml
+      cat deployment.yaml
+      kubectl -n uat apply -f deployment.yaml
+    elif [[ "$RELEASE" == "production" ]]; then
+      sed 's/_VERSION_/'"$CI_COMMIT_SHA"'/g; s/APP_NAME/'"$CI_PROJECT_NAME"'/g; s/_DATE_/'"$DATE"'/g; s/env-/'"$RELEASE-"'/g; s/staging-truck/truck/g' ./provision/k8s/production/* > deployment.yaml
+      cat deployment.yaml
+      kubectl apply -f deployment.yaml
+    elif [[ "$RELEASE" == "new-production" ]]; then
+      sed 's/_VERSION_/'"$CI_COMMIT_SHA"'/g; s/APP_NAME/'"$CI_PROJECT_NAME"'/g; s/_DATE_/'"$DATE"'/g; s/env-/'"production-"'/g; s/staging-truck/truck/g' ./provision/k8s/new-production/* > deployment.yaml
+      cat deployment.yaml
+      kubectl apply -f deployment.yaml
+    else
+      echo "none"
+    fi
+  }
+  
+before_script:
+  - *auto_devops
